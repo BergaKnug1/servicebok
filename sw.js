@@ -1,8 +1,8 @@
 // Service worker: gör att appen startar utan nät. Appens egna filer cachas;
 // Google Drive och Wikimedia går alltid direkt mot nätet.
-const CACHE = 'servicebok-v2';
+const CACHE = 'servicebok-v8';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'webstore.js', 'vin_data.js', 'config.js',
-  'vendor/jszip.min.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
+  'vendor/jszip.min.js', 'paste_parser.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

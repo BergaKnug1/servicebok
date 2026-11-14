@@ -112,6 +112,7 @@ button:disabled { opacity: .45; cursor: default; }
 .badge.ok { background: rgba(31,157,85,.15); color: var(--ok); }
 .badge.warn { background: rgba(227,160,8,.18); color: #b07800; }
 .badge.off { background: #2a3647; color: #aab6c4; }
+.badge.bad { background: rgba(214,69,69,.15); color: var(--bad); }
 .badge.info { background: rgba(28,105,212,.14); color: var(--accent); }
 .mini-thumbs { display: flex; gap: 6px; margin-top: 8px; }
 .mini-thumbs img { width: 46px; height: 46px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); }
@@ -209,3 +210,21 @@ body.web .desktop-only { display: none !important; }
   #printView img { max-width: 100%; max-height: 16cm; }
   #printView figure { margin: 8px 0; }
 }
+
+/* Besiktning & register */
+.reg-top { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.plate { font: 700 20px/1 "Segoe UI", system-ui, sans-serif; letter-spacing: .08em; background: #fff; color: #111;
+  border: 2px solid #111; border-left: 14px solid #1d4ea3; border-radius: 6px; padding: 6px 12px; white-space: nowrap; }
+.due { display: flex; flex-direction: column; }
+.due b { font-size: 18px; }
+.reg-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px 18px; margin: 14px 0 6px; }
+.reg-facts div { display: flex; flex-direction: column; font-size: 13px; }
+.reg-facts span { color: var(--muted); font-size: 12px; }
+.hist { margin: 8px 0 0; padding: 0; list-style: none; }
+.hist li { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13px; display: flex; gap: 12px; }
+.hist li b { min-width: 88px; }
+.reg-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.reg-links a, .reg-links button { text-decoration: none; }
+.paste-box { width: 100%; min-height: 150px; font-size: 13px; }
+.paste-preview table { margin-top: 6px; } .paste-preview td:first-child { color: var(--muted); }
+.modal-box { max-height: 90vh; overflow: auto; }

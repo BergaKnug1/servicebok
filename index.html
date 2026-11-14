@@ -52,6 +52,7 @@
         </div>
       </div>
     </div>
+    <div class="card" id="regCard"></div>
     <div class="grid2">
       <div class="card">
         <h2>Servicebehov (CBS)</h2>
@@ -213,7 +214,10 @@
       <button class="ghost" id="btnNewCar">➕ Lägg till bil</button></div>
     <div class="grid2">
       <form id="carForm" class="card form">
-        <label>Namn<input name="name" placeholder="T.ex. Familjebilen"></label>
+        <div class="grid2">
+          <label>Namn<input name="name" placeholder="T.ex. Familjebilen"></label>
+          <label>Registreringsnummer<input name="regnr" maxlength="10" placeholder="ABC123" style="text-transform:uppercase"></label>
+        </div>
         <div class="row gap">
           <label style="flex:1">VIN<input name="vin" maxlength="17" placeholder="17 tecken"></label>
           <button type="button" class="ghost" id="btnDecode" style="align-self:end">Avkoda</button>
@@ -225,6 +229,7 @@
           <label>Årsmodell<input type="number" name="year"></label>
           <label>Färg<select name="paint_code"></select></label>
           <label>Mätarställning (km)<input type="number" name="mileage"></label>
+          <label>Nästa besiktning senast<input type="date" name="next_inspection"></label>
           <label class="desktop-only">Bilkommunikation<select name="profile"></select></label>
         </div>
         <div class="row gap end">
@@ -244,6 +249,14 @@
           <input type="file" id="photoInput" accept="image/*" hidden>
         </div>
         <div id="photoResults" class="photo-grid"></div>
+        <h2 style="margin-top:24px">Fordonsdata från registret</h2>
+        <p class="muted" style="margin-top:0">Med en API-nyckel från <a href="https://biluppgifter.se/produkter/" target="_blank">Biluppgifter.se</a>
+          (betaltjänst, kontakta info@biluppgifter.se) hämtas besiktning, ägarbyten och historik automatiskt via registreringsnumret.
+          Utan nyckel finns genvägar till Transportstyrelsen och Biluppgifter på startsidan.</p>
+        <form id="regForm" class="form">
+          <label>API-nyckel (Biluppgifter)<input name="biluppgifter_api_key" type="password" autocomplete="off"></label>
+          <button class="ghost" type="submit">Spara nyckel</button>
+        </form>
         <h2 style="margin-top:24px" class="desktop-only">Programinställningar</h2>
         <form id="cfgForm" class="form desktop-only">
           <label>EDIABAS-mapp<input name="ediabas_dir"></label>
@@ -272,6 +285,7 @@
 <script src="vin_data.js"></script>
 <script src="vendor/jszip.min.js"></script>
 <script src="webstore.js"></script>
+<script src="paste_parser.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

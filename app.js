@@ -8,7 +8,7 @@ const fmtKm = km => (km || km === 0) ? Number(km).toLocaleString('sv-SE') + ' km
 const S = { cars: [], car: null, entries: [], lists: {}, types: [], statuses: {}, config: {},
   editing: null, pending: [], connected: false, lastRead: null, exploreSgbd: null, lastResult: '', web: false, drive: {} };
 const MUTATING = new Set(['save_car', 'delete_car', 'set_car_photo', 'choose_car_photo', 'save_entry', 'delete_entry',
-  'add_attachment', 'delete_attachment', 'car_read', 'car_write', 'import_from_car', 'import_backup']);
+  'add_attachment', 'delete_attachment', 'car_read', 'set_car_vin', 'car_write', 'import_from_car', 'import_backup', 'fetch_vehicle_data', 'import_inspections', 'set_vehicle_info']);
 
 let api;
 async function call(name, ...args) {
@@ -90,7 +90,7 @@ async function renderHome() {
   $('#heroCredit').textContent = c.photo_url ? (c.photo_credit || '') : '';
   $('#heroName').textContent = c.name;
   $('#heroModel').textContent = [c.model, c.chassis && `(${c.chassis})`].filter(Boolean).join(' ');
-  const facts = [['VIN', c.vin], ['Årsmodell', c.year], ['Färg', [c.paint_code, c.paint_name].filter(Boolean).join(' ')],
+  const facts = [['Reg.nr', c.regnr], ['VIN', c.vin], ['Årsmodell', c.year], ['Färg', [c.paint_code, c.paint_name].filter(Boolean).join(' ')],
     ['Mätarställning', fmtKm(c.mileage)], ['Antal servicer', S.entries.length]];
   $('#heroFacts').innerHTML = facts.filter(f => f[1]).map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('');
 
@@ -104,6 +104,7 @@ async function renderHome() {
     : (S.web ? `<div class="empty">Ingen CBS-data än. Den läses från bilen i datorprogrammet och synkas hit.</div>`
       : `<div class="empty">Ingen CBS-data än. Anslut bilen under <a href="#" data-goto="live">Bilen live</a>.</div>`);
   backupReminder();
+  renderReg();
 
   $('#timeline').innerHTML = S.entries.slice(0, 6).map(e =>
     `<li data-id="${e.id}"><b>${esc(e.date)} · ${fmtKm(e.km)}</b><span class="muted">${esc(e.types.join(', ') || e.notes || '')}</span></li>`).join('')
@@ -268,6 +269,19 @@ async function readCar() {
   renderLive(r);
 }
 
+// VIN från bilen (ENET), sparat i appen och från registret – med markering om de stämmer
+function vinRows(vc, carVin) {
+  vc = vc || { car: carVin };
+  const same = (a, b) => a && b && a.slice(-7) === b.slice(-7);
+  const mark = v => !v || !vc.car ? '' : same(v, vc.car) ? ' <span class="badge ok">✓ stämmer</span>' : ' <span class="badge bad">skiljer sig</span>';
+  let html = `<tr><th>VIN i bilen (ENET)</th><td><b>${esc(vc.car || '–')}</b></td></tr>
+    <tr><th>VIN sparat i appen</th><td>${esc(vc.saved || '–')}${mark(vc.saved)}</td></tr>`;
+  if (vc.registry) html += `<tr><th>VIN i registret</th><td>${esc(vc.registry)}${mark(vc.registry)}</td></tr>`;
+  if (vc.car && vc.car.length === 17 && vc.saved && !same(vc.saved, vc.car))
+    html += `<tr><td colspan="2"><button class="ghost small" id="btnUseCarVin">Använd bilens VIN i appen</button></td></tr>`;
+  return html;
+}
+
 function histRow(h) { return `<td>${esc(h.date)}</td><td>${fmtKm(h.km)}</td><td>${esc((h.types || []).join(', '))}</td>`; }
 
 function renderLive(r) {
@@ -277,7 +291,7 @@ function renderLive(r) {
   if (!d.verified) html += `<div class="card alert"><b>Profilen är inte verifierad.</b> Jobbnamnen för ${esc(d.profile)} är kandidater. Läsning provas, men skrivning är avstängd tills du har kontrollerat jobben under <a href="#" data-goto="explore">Utforska</a>.${d.mock ? ' (Demoläget kan skriva till den låtsade bilen.)' : ''}</div>`;
   if (r.notes?.length) html += `<div class="card alert">${r.notes.map(esc).join('<br>')}</div>`;
   html += `<div class="grid2"><div class="card"><h2>Bilen</h2><table>
-    <tr><th>VIN</th><td>${esc(d.vin || '–')}</td></tr>
+    ${vinRows(r.vin_check, d.vin)}
     <tr><th>Mätarställning</th><td>${fmtKm(d.mileage)}</td></tr>
     <tr><th>Chassi (FA)</th><td>${esc(d.fa?.chassis || '–')}</td></tr>
     <tr><th>Färgkod (FA)</th><td>${esc(d.fa?.paint_code || '–')}</td></tr>
@@ -296,6 +310,10 @@ function renderLive(r) {
   html += `<div class="card"><h2>I bilen men saknas i loggboken (${cmp.only_in_car.length})</h2>
     <table>${cmp.only_in_car.map((h, i) => `<tr>${histRow(h)}<td style="text-align:right"><button class="ghost small" data-import="${i}">Importera</button></td></tr>`).join('') || '<tr><td class="muted">Inget att importera</td></tr>'}</table></div>`;
   $('#liveResult').innerHTML = html;
+  const uv = $('#btnUseCarVin'); if (uv) uv.onclick = async () => {
+    await call('set_car_vin', S.car.id, r.vin_check.car); await loadCars(S.car.id); toast('✓ VIN uppdaterat från bilen');
+    r.vin_check.saved = r.vin_check.car; renderLive(r);
+  };
   $$('[data-write]').forEach(b => b.onclick = () => writeEntry(idOf(b.dataset.write)));
   $$('[data-import]').forEach(b => b.onclick = async () => {
     await call('import_from_car', S.car.id, cmp.only_in_car[Number(b.dataset.import)]);
@@ -447,6 +465,8 @@ function renderCarForm(car = S.car) {
   $('#carTitle').textContent = car.id ? car.name : 'Ny bil';
   f.name.value = car.name || ''; f.vin.value = car.vin || ''; f.model.value = car.model || '';
   f.year.value = car.year || ''; f.mileage.value = car.mileage || '';
+  f.regnr.value = car.regnr || ''; f.next_inspection.value = car.next_inspection || '';
+  $('#regForm').biluppgifter_api_key.value = S.config.biluppgifter_api_key || '';
   f.chassis.innerHTML = opt('', '– välj –', car.chassis) + L.chassis.map(c => opt(c.code, `${c.code} · ${c.desc}`, car.chassis)).join('');
   f.paint_code.innerHTML = opt('', 'Egen kulör', car.paint_code) + L.paints.map(p => opt(p.code, `${p.code} · ${p.name}`, car.paint_code)).join('');
   f.dataset.body = car.body || 'sedan';
@@ -461,7 +481,8 @@ function formCar() {
   const p = S.lists.paints.find(x => x.code === f.paint_code.value);
   return { id: idOf(f.dataset.id), name: f.name.value, vin: f.vin.value, chassis: f.chassis.value,
     model: f.model.value, year: Number(f.year.value) || null, body: f.dataset.body, paint_code: f.paint_code.value || null,
-    paint_name: p ? p.name : null, paint_hex: p ? p.hex : null, profile: f.profile.value || null, mileage: Number(f.mileage.value) || null };
+    paint_name: p ? p.name : null, paint_hex: p ? p.hex : null, profile: f.profile.value || null, mileage: Number(f.mileage.value) || null,
+    regnr: f.regnr.value.trim() || null, next_inspection: f.next_inspection.value || null };
 }
 function updatePreview() {
   const cur = S.cars.find(x => x.id === formCar().id);
@@ -523,6 +544,155 @@ $('#btnPhotoRemove').onclick = async () => {
 $('#cfgForm').onsubmit = async e => {
   e.preventDefault(); const f = e.target;
   S.config = { ...S.config, ...(await call('save_config', { ediabas_dir: f.ediabas_dir.value, python32: f.python32.value })) }; toast('✓ Inställningar sparade');
+};
+
+// ------------------------------------------------- besiktning & register
+function addMonths(iso, n) { const d = new Date(iso + 'T12:00:00'); d.setMonth(d.getMonth() + n); return d.toISOString().slice(0, 10); }
+function nextInspection(c) {
+  if (c.next_inspection) return { date: c.next_inspection, how: c.vehicle_info?.inspection_valid_until === c.next_inspection ? 'enligt registret' : 'inlagt av dig' };
+  const last = S.entries.filter(e => e.types.includes('Besiktning')).map(e => e.date).sort().pop();
+  if (last) return { date: addMonths(last, 14), how: 'beräknat: senaste besiktning + 14 månader (vanligt för bilar äldre än 5 år – kontrollera)' };
+  return null;
+}
+// "Besiktigad2025-11-28" -> "Besiktigad"; visar händelsetypen bara om texten inte redan säger samma sak
+function histLabel(h) {
+  const t = PasteParser.cleanText(h.text || '');
+  const stem = (h.kind || '').toLowerCase().slice(0, 5);
+  if (!t) return h.kind ? h.kind[0].toUpperCase() + h.kind.slice(1) : '';
+  return stem && !t.toLowerCase().includes(stem) && !t.toLowerCase().includes(stem.slice(0, 4)) ? `${h.kind} – ${t}` : t;
+}
+// En händelse i registerhistoriken. Strukturerade händelser (rubrik + beskrivning) visas med resultatmärkning.
+function regHistItem(h) {
+  if (h.title && !/^[a-zåäö]+$/i.test(h.title)) return '';   // skräp från äldre inklistring (t.ex. diagramtext)
+  const date = h.approx_month ? h.date.slice(0, 7) : h.date;
+  if (!h.title) return `<li><b>${esc(date)}</b><span>${esc(histLabel(h))}${h.meter ? ' · ' + fmtKm(h.meter) : ''}</span></li>`;
+  const bad = h.result && /ej godkänd|underkänd|körförbud/.test(h.result);
+  const badge = h.result ? ` <span class="badge ${bad ? 'bad' : 'ok'}">${esc(h.result[0].toUpperCase() + h.result.slice(1))}</span>` : '';
+  const desc = (h.text || '').replace(/^(ej\s+godkänd|underkänd|godkänd\s+med\s+anmärkning|godkänd)\s*/i, '');
+  const title = h.kind === 'påställd' ? 'Påställd' : h.kind === 'avställd' ? 'Avställd' : h.title[0].toUpperCase() + h.title.slice(1);
+  return `<li><b>${esc(date)}</b><span><b>${esc(title)}</b>${badge}<br><span class="muted">${esc(desc[0] ? desc[0].toUpperCase() + desc.slice(1) : '')}</span></span></li>`;
+}
+function renderReg() {
+  const c = S.car, box = $('#regCard'); if (!c) return;
+  const v = c.vehicle_info || null, nx = nextInspection(c), reg = c.regnr;
+  let due = '<div class="due"><span class="muted">Nästa besiktning</span><b>–</b><small class="muted">Lägg in under Bil, eller hämta från registret</small></div>';
+  if (nx) {
+    const days = Math.round((new Date(nx.date + 'T12:00:00') - new Date()) / 864e5);
+    const cls = days < 0 ? 'bad' : days <= 30 ? 'warn' : 'ok';
+    const txt = days < 0 ? `${-days} dagar sedan!` : days === 0 ? 'idag' : `om ${days} dagar`;
+    due = `<div class="due"><span class="muted">Nästa besiktning senast</span><b>${esc(nx.date)} <span class="badge ${cls === 'bad' ? 'warn' : cls}" style="${cls === 'bad' ? 'background:rgba(214,69,69,.15);color:var(--bad)' : ''}">${txt}</span></b>
+      <small class="muted">${esc(nx.how)}${v?.next_inspection_from && v?.next_inspection_to ? ` · besiktningsperiod ${esc(v.next_inspection_from)} – ${esc(v.next_inspection_to)}` : ''}</small></div>`;
+    if (days <= 30 && !sessionStorage['insp' + c.id]) { sessionStorage['insp' + c.id] = 1; setTimeout(() => toast(`🔧 Besiktning ${days < 0 ? 'är försenad' : txt} (${nx.date})`, 6000), 600); }
+  }
+  const cap = s => s ? s[0].toUpperCase() + s.slice(1) : s;
+  const facts = v ? [['Senaste besiktning', v.latest_inspection ? v.latest_inspection + (v.latest_result ? ' – ' + cap(v.latest_result) : '') : null],
+    ['Besiktningsstation', v.latest_station], ['Mätarställning vid besiktning', v.meter != null ? fmtKm(v.meter) : null],
+    ['Besiktningar', v.inspections_count ? `${v.inspections_count} st${v.inspections_failed ? `, ${v.inspections_failed} ej godkänd` : ''}` : null],
+    ['Status', v.status], ['Antal ägare', v.number_of_owners], ['Ägarbyten', v.owner_changes], ['Senaste ägarbyte', v.latest_owner_change],
+    ['Tillverkad', v.manufactured], ['Senaste annons', v.last_ad ? `${v.last_ad.date}: ${Number(v.last_ad.price).toLocaleString('sv-SE')} kr${v.last_ad.meter ? ', ' + fmtKm(v.last_ad.meter) : ''}` : null],
+    ['I trafik första gången', v.first_registered], ['I Sverige sedan', v.first_on_swedish_roads],
+    ['Importerad', v.imported == null ? null : (v.imported ? 'Ja' : 'Nej')], ['Leasing', v.leasing == null ? null : (v.leasing ? 'Ja' : 'Nej')],
+    ['Fordonsskatt', v.tax != null ? `${v.tax} kr/år${v.tax_month ? ' (' + v.tax_month + ')' : ''}` : null]]
+    .filter(f => f[1] != null && f[1] !== '') : [];
+  const hist = v?.history || [];
+  const isMobile = /iPhone|iPad|Android/i.test(navigator.userAgent);
+  const sms = reg ? (/iPhone|iPad/i.test(navigator.userAgent) ? `sms:71640&body=${reg}` : `sms:71640?body=${reg}`) : '';
+  box.innerHTML = `<h2>Besiktning & fordonsregister</h2>
+    <div class="reg-top">${reg ? `<span class="plate">${esc(reg.replace(/^([A-ZÅÄÖ]{3})(\w{3})$/, '$1 $2'))}</span>` : ''}${due}</div>
+    ${v?.warning ? `<div class="msg err">${esc(v.warning)}</div>` : ''}
+    ${facts.length ? `<div class="reg-facts">${facts.map(([k, x]) => `<div><span>${k}</span><b>${esc(x)}</b></div>`).join('')}</div>
+      <small class="muted">Från ${esc(v.source)}, hämtat ${esc((v.fetched_at || '').replace('T', ' ').slice(0, 16))}</small>` : ''}
+    ${hist.length ? `<details style="margin-top:10px"><summary>Historik i registret (${v.history.length})</summary><ul class="hist">
+      ${hist.map(regHistItem).join('')}</ul></details>` : ''}
+    <div class="reg-links">
+      ${!reg ? '<a class="ghost small" href="#" data-goto="car" style="padding:7px 12px;border:1px solid var(--line);border-radius:9px">➕ Lägg till registreringsnummer</a>' : ''}
+      ${reg && S.config.biluppgifter_api_key ? '<button class="primary small" id="btnRegFetch">🔄 Hämta från registret</button>' : ''}
+      <button class="${S.config.biluppgifter_api_key ? 'ghost' : 'primary'} small" id="btnRegPaste">📋 Klistra in fordonsuppgifter</button>
+      ${v ? '<button class="ghost small" id="btnRegImport">Importera besiktningar till serviceboken</button>' : ''}
+      ${reg ? `<a class="ghost small" target="_blank" rel="noopener" href="https://www.transportstyrelsen.se/sv/vagtrafik/fordon/fordons-agaruppgift/sok-fordons-och-agaruppgifter/" style="padding:7px 12px;border:1px solid var(--line);border-radius:9px">Transportstyrelsen ↗</a>
+        <a class="ghost small" target="_blank" rel="noopener" href="https://biluppgifter.se/fordon/${encodeURIComponent(reg)}" style="padding:7px 12px;border:1px solid var(--line);border-radius:9px">Biluppgifter ↗</a>
+        ${isMobile ? `<a class="ghost small" href="${sms}" style="padding:7px 12px;border:1px solid var(--line);border-radius:9px">SMS till 71640</a>` : ''}
+        <button class="ghost small" id="btnRegCopy">📋 Kopiera reg.nr</button>` : ''}
+    </div>`;
+  const f = $('#btnRegFetch'); if (f) f.onclick = async () => {
+    f.disabled = true; f.textContent = 'Hämtar…';
+    try { await call('fetch_vehicle_data', c.id); await loadCars(c.id); toast('✓ Registeruppgifter hämtade'); renderHome(); }
+    catch { f.disabled = false; f.textContent = '🔄 Hämta från registret'; }
+  };
+  const im = $('#btnRegImport'); if (im) im.onclick = async () => {
+    const r = await call('import_inspections', c.id); await loadCars(c.id); renderHome();
+    toast(r.imported ? `✓ ${r.imported} besiktningar lades till i serviceboken` : 'Alla besiktningar från registret finns redan i serviceboken');
+  };
+  $('#btnRegPaste').onclick = () => pasteVehicleInfo(c);
+  const cp = $('#btnRegCopy'); if (cp) cp.onclick = async () => {
+    try { await navigator.clipboard.writeText(reg); toast('Kopierat: ' + reg); } catch { toast(reg); }
+  };
+}
+const PASTE_LABELS = { latest_inspection: 'Senaste besiktning', inspection_valid_until: 'Nästa besiktning senast',
+  next_inspection_from: 'Besiktningsperiod från', next_inspection_to: 'Besiktningsperiod till', meter: 'Mätarställning',
+  number_of_owners: 'Antal ägare', latest_owner_change: 'Senaste ägarbyte', first_registered: 'I trafik första gången',
+  first_on_swedish_roads: 'I Sverige sedan', tax: 'Fordonsskatt', status: 'Status', regnr: 'Registreringsnummer',
+  vin: 'VIN / chassinummer', model_year: 'Modellår', vehicle_year: 'Fordonsår', color: 'Färg',
+  latest_result: 'Senaste resultat', latest_station: 'Besiktningsstation', inspections_count: 'Antal besiktningar',
+  inspections_failed: 'Varav ej godkända', owner_changes: 'Ägarbyten', manufactured: 'Tillverkad', last_ad: 'Senaste annons' };
+async function pasteVehicleInfo(c) {
+  const html = `<ol class="muted" style="margin:0 0 10px 18px;padding:0">
+      <li>Öppna bilens sida hos <b>Biluppgifter</b> eller <b>Transportstyrelsen</b> (eller sms-svaret från 71640).</li>
+      <li>Markera allt (Ctrl+A / <i>Markera alla</i>) och kopiera.</li>
+      <li>Klistra in här nedanför.</li></ol>
+    <textarea id="pasteText" class="paste-box" placeholder="Klistra in texten här…"></textarea>
+    ${navigator.clipboard?.readText ? '<button type="button" class="ghost small" id="pasteFromClip" style="margin-top:6px">📋 Klistra in från urklipp</button>' : ''}
+    <div id="pastePreview" class="paste-preview msg"></div>`;
+  let parsed = null;
+  const p = modal('Klistra in fordonsuppgifter', html, 'Spara uppgifterna');
+  const ta = $('#pasteText'), pv = $('#pastePreview');
+  const update = () => {
+    parsed = ta.value.trim() ? PasteParser.parse(ta.value) : null;
+    const inf = parsed?.info || {}, keys = Object.keys(PASTE_LABELS).filter(k => inf[k] != null);
+    const fmt = (k, v) => k === 'meter' ? fmtKm(v) : k === 'tax' ? v + ' kr'
+      : k === 'last_ad' ? `${v.date}: ${Number(v.price).toLocaleString('sv-SE')} kr${v.meter ? ', ' + fmtKm(v.meter) : ''}` : v;
+    pv.innerHTML = !parsed ? '' : keys.length || inf.history
+      ? `<b>Hittade:</b><table>${keys.map(k => `<tr><td>${PASTE_LABELS[k]}</td><td><b>${esc(fmt(k, inf[k]))}</b></td></tr>`).join('')}
+         ${inf.history ? `<tr><td>Historik</td><td><b>${inf.history.length} händelser</b> (${esc([...new Set(inf.history.map(h => h.kind))].join(', '))})</td></tr>` : ''}</table>
+         ${inf.regnr && c.regnr && inf.regnr !== c.regnr ? `<div class="msg err">⚠ Texten gäller ${esc(inf.regnr)}, men bilen har ${esc(c.regnr)}.</div>` : ''}
+         ${inf.vin && c.vin && inf.vin !== c.vin ? `<div class="msg err">⚠ VIN i texten (${esc(inf.vin)}) skiljer sig från bilens sparade VIN (${esc(c.vin)}).</div>` : ''}`
+      : '<span class="err">Hittade inga fordonsuppgifter i texten. Kopiera hela sidan och försök igen.</span>';
+  };
+  ta.addEventListener('input', update); ta.focus();
+  const clip = $('#pasteFromClip');
+  if (clip) clip.onclick = async () => { try { ta.value = await navigator.clipboard.readText(); update(); } catch { toast('Tillåt urklipp, eller håll fingret i rutan och välj Klistra in'); } };
+  if (!await p) return;
+  const inf = parsed?.info;
+  if (!inf || !Object.keys(inf).some(k => k !== 'regnr')) { toast('Inga uppgifter att spara'); return; }
+  if (inf.regnr && c.regnr && inf.regnr !== c.regnr &&
+      !await modal('Fel bil?', `<p>Texten gäller <b>${esc(inf.regnr)}</b> men bilen har registreringsnummer <b>${esc(c.regnr)}</b>. Spara ändå?</p>`, 'Spara ändå')) return;
+  const old = c.vehicle_info || {}, { regnr, history, ...fields } = inf;
+  // Inklistrad strukturerad historik (från Biluppgifter) är komplett – den ersätter den gamla. Annars slås de ihop.
+  const hist = history?.some(h => h.title) ? history : [...(history || []), ...(old.history || [])];
+  const seen = new Set();
+  const info = { ...old, ...fields, source: 'Inklistrat (Biluppgifter/Transportstyrelsen)', fetched_at: new Date().toISOString().slice(0, 16).replace('T', ' '),
+    history: hist.filter(h => { const k = h.date + h.kind; if (seen.has(k)) return false; seen.add(k); return true; }).sort((a, b) => b.date.localeCompare(a.date)) };
+  delete info.warning;
+  // Uppdatera bilens egna uppgifter: tomma fält fylls i, avvikande VIN frågar vi om
+  const carUpd = {};
+  if (!c.regnr && regnr) carUpd.regnr = regnr;
+  if (fields.vin && fields.vin !== c.vin) {
+    if (!c.vin) carUpd.vin = fields.vin;
+    else if (await modal('Annat VIN i registret', `<p>Registret anger VIN <b>${esc(fields.vin)}</b>, men bilen har <b>${esc(c.vin)}</b> sparat.</p>
+        <p class="muted">Om du har skrivit in VIN för hand kan det vara felskrivet. Om du har läst det från bilen via ENET stämmer bilens oftast.</p>`,
+        'Använd registrets VIN', 'Behåll nuvarande')) carUpd.vin = fields.vin;
+  }
+  if (!c.year && (fields.model_year || fields.vehicle_year)) carUpd.year = fields.model_year || fields.vehicle_year;
+  if (Object.keys(carUpd).length) await call('save_car', { ...c, ...carUpd });
+  await call('set_vehicle_info', c.id, info);
+  await loadCars(c.id); renderHome();
+  toast(`✓ Sparade ${Object.keys(fields).length} uppgifter${history ? ` och ${history.length} historikhändelser` : ''}`);
+}
+
+$('#regForm').onsubmit = async e => {
+  e.preventDefault();
+  S.config = { ...S.config, ...(await call('save_config', { biluppgifter_api_key: e.target.biluppgifter_api_key.value })) };
+  toast('✓ API-nyckel sparad');
 };
 
 // ---------------------------------------------------------------- tema
