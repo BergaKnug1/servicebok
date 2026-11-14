@@ -55,7 +55,14 @@
     ['vin', /chassinummer|chassinr|chassi-?nr|vin-?nummer|\bvin\b|identifieringsnummer/i, 'vin'],
     ['model_year', /modellår/i, 'year'],
     ['vehicle_year', /fordonsår|tillverkningsår/i, 'year'],
-    ['color', /^(?:färg|kulör)\b/i, 'text'],
+    ['color', /^(?:färg|kulör)(?![a-zåäö])/i, 'text'],
+    ['paint_code', /färgkod|lackkod|färgnummer/i, 'paintcode'],
+    ['make', /^(?:märke|fabrikat)(?![a-zåäö])/i, 'text'],
+    ['model_name', /^(?:modell|modellbeteckning|handelsbeteckning)(?![a-zåäö])/i, 'text'],
+    ['fuel', /^(?:drivmedel|bränsle(?:typ)?)(?![a-zåäö])/i, 'text'],
+    ['power_hp', /^(?:effekt|motoreffekt|hästkrafter)(?![a-zåäö])/i, 'hp'],
+    ['gearbox', /^(?:växellåda|transmission)(?![a-zåäö])/i, 'text'],
+    ['body_type', /^(?:kaross(?:eri)?|karosstyp|chassityp)(?![a-zåäö])/i, 'text'],
   ];
 
   // Text efter rubriken på samma rad (för sms där allt står på en rad), annars nästa rad
@@ -170,6 +177,12 @@
         else if (type === 'money') v = money(near);
         else if (type === 'text') v = near.split(/\s{2,}|[.,;]/)[0].trim().slice(0, 40) || null;
         else if (type === 'vin') { const m = VIN_RE.exec(near.toUpperCase()); v = m ? m[1] : null; }
+        else if (type === 'paintcode') { const m = /\b([A-Z]?\d{2,3}|[A-Z]\d{2}|[A-Z]{2}\d)\b/.exec(near.toUpperCase()); v = m ? m[1].replace(/^0(?=\d{3}$)/, '') : null; }
+        else if (type === 'hp') {
+          const hp = /(\d{2,4})\s*(?:hk|hp|hästkrafter)\b/i.exec(near), kw = /(\d{2,4})\s*kw\b/i.exec(near);
+          v = hp ? +hp[1] : kw ? Math.round(+kw[1] * 1.36) : null;
+          if (kw) info.power_kw = +kw[1];
+        }
         else if (type === 'year') { const m = /\b(19[5-9]\d|20[0-4]\d)\b/.exec(near); v = m ? +m[1] : null; }
         if (v != null) { info[field] = v; found.push(field); }
       }

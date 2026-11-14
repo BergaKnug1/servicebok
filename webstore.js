@@ -7,7 +7,7 @@
   const CFG = window.SERVICEBOK_CONFIG || {};
   const STORES = ['cars', 'entries', 'attachments', 'snapshots'];
   const IMAGE_EXT = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
-  const CAR_FIELDS = ['name', 'vin', 'chassis', 'model', 'body', 'year', 'paint_code', 'paint_name', 'paint_hex', 'profile', 'mileage'];
+  const CAR_FIELDS = ['name', 'vin', 'chassis', 'model', 'body', 'year', 'paint_code', 'paint_name', 'paint_hex', 'profile', 'mileage', 'regnr', 'next_inspection'];
   const ENTRY_FIELDS = ['date', 'km', 'types', 'performed_by', 'parts', 'cost', 'notes', 'car_status', 'source'];
   const nowUtc = () => new Date().toISOString();
   const nowLocal = () => { const d = new Date(); return new Date(d - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 19); };
@@ -119,16 +119,52 @@
     if (!checkDigitOk(vin)) res.warnings.push('Kontrollsiffran (pos 9) stämmer inte. Kontrollera att VIN är rätt inskrivet.');
     if (!V.wmi[res.wmi]) res.warnings.push('Inte ett känt BMW/MINI-VIN – loggboken fungerar ändå.');
     const known = ((await meta('typekeys')) || {})[res.type_key];
-    if (known) Object.assign(res, { chassis: known.chassis, model: known.model, source: 'inlärd typnyckel' });
+    if (known) { Object.entries(known).forEach(([k, v]) => { if (v != null && v !== '') res[k] = v; }); res.source = 'inlärd typnyckel'; }
     const ch = V.chassis[res.chassis];
-    if (ch) Object.assign(res, { chassis_desc: ch[0], body: ch[1], profile: ch[2] });
+    if (ch) Object.assign(res, { chassis_desc: ch[0], profile: ch[2], body: res.body || ch[1] });
     return res;
   }
-  async function learnTypeKey(car) {
+  // Kommer ihåg vad en typnyckel betyder (som TypeKeys.learn i vin.py)
+  async function learnTypeKey(car, extra = {}) {
     const d = await decodeVin(car.vin || '');
-    if (!d.valid || !car.chassis || car.chassis === 'Annan') return;
-    const tk = (await meta('typekeys')) || {}; tk[d.type_key] = { chassis: car.chassis, model: car.model };
+    if (!d.valid) return;
+    const add = { chassis: car.chassis && car.chassis !== 'Annan' ? car.chassis : null, model: car.model, ...extra };
+    Object.keys(add).forEach(k => (add[k] == null || add[k] === '') && delete add[k]);
+    if (!Object.keys(add).length) return;
+    const tk = (await meta('typekeys')) || {}; tk[d.type_key] = { ...(tk[d.type_key] || {}), ...add };
     await meta('typekeys', tk);
+  }
+  // Fält i "Min bil" som saknas men finns i registeruppgifterna (som car_updates_from_registry i vin.py)
+  const BODY_WORDS = [['touring', ['herrgårdsvagn', 'kombi', 'touring', 'stationsvagn']], ['hatch', ['halvkombi', 'hatchback']],
+    ['coupe', ['kupé', 'coupé', 'coupe', 'cabriolet', 'cab']], ['suv', ['suv', 'terräng', 'crossover']], ['sedan', ['sedan']]];
+  const bodyFromText = t => { t = (t || '').toLowerCase(); const b = BODY_WORDS.find(([, ws]) => ws.some(w => t.includes(w))); return b ? b[0] : null; };
+  function carUpdatesFromRegistry(car, info) {
+    const upd = {};
+    if (!car.vin && info.vin) upd.vin = info.vin;
+    if (!car.regnr && info.regnr) upd.regnr = info.regnr;
+    const model = info.model_name || info.model, defModel = (V.chassis[car.chassis] || [''])[0];
+    if (model && (!car.model || car.model === defModel)) upd.model = model;
+    const year = info.model_year || info.vehicle_year;
+    if (!car.year && year) upd.year = +year;
+    if (!car.paint_code) {
+      const code = String(info.paint_code || '').toUpperCase().replace(/^0+/, '') || null;
+      if (code && V.paints[code]) Object.assign(upd, { paint_code: code, paint_name: V.paints[code][0], paint_hex: V.paints[code][1] });
+      else if (code) Object.assign(upd, { paint_code: code, paint_name: car.paint_name || info.color || null });
+      else if (!car.paint_name && info.color) upd.paint_name = info.color;
+    }
+    const body = bodyFromText(info.body_type);
+    if (body && !car.chassis && [null, undefined, '', 'sedan'].includes(car.body)) upd.body = body;
+    return upd;
+  }
+  async function applyRegistry(c, info) {
+    const filled = carUpdatesFromRegistry(c, info);
+    const rec = { ...c, ...filled, vehicle_info: info, updated: nowUtc() };
+    if (info.inspection_valid_until) rec.next_inspection = info.inspection_valid_until;
+    if (info.meter && info.meter > (c.mileage || 0)) rec.mileage = info.meter;
+    await put('cars', rec);
+    await learnTypeKey(rec, { fuel: info.fuel, power_hp: info.power_hp, gearbox: info.gearbox, body: bodyFromText(info.body_type) });
+    changed();
+    return { ...(await viewCar(rec)), filled: Object.keys(filled).filter(k => k !== 'paint_hex').sort() };
   }
 
   // ------------------------------------------------------------ bilfoton (som car_photos.py)
@@ -142,6 +178,50 @@
         return ii.thumburl && { title: p.title.replace(/^File:/, ''), thumb: ii.thumburl, page: ii.descriptionurl,
           artist: strip(m.Artist?.value) || 'Okänd fotograf', license: m.LicenseShortName?.value || '' }; })
       .filter(Boolean);
+  }
+
+  // ------------------------------------------------------------ registeruppgifter (som vehicle_data.py)
+  const STATUS = { 1: 'Avställd', 2: 'I trafik', 3: 'Avregistrerad', 4: 'Aldrig i trafik' };
+  const dOnly = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : null;
+  const first = (o, ...ks) => { for (const k of ks) if (o[k] != null && o[k] !== '') return o[k]; return null; };
+  function parseHistory(h) {
+    const out = [];
+    const walk = (node, kind) => {
+      if (node && typeof node === 'object' && !Array.isArray(node) && 'data' in node && Object.keys(node).length <= 2) return walk(node.data, kind);
+      if (Array.isArray(node)) { node.forEach(i => walk(i, kind)); return; }
+      if (!node || typeof node !== 'object') return;
+      let date = dOnly(first(node, 'date', 'inspection_date', 'event_date', 'changed_at', 'created_at', 'registered_at') || '');
+      if (!date) date = Object.values(node).map(dOnly).find(Boolean) || null;
+      if (date) {
+        let text = first(node, 'description', 'text', 'type_text', 'event', 'type', 'result', 'status');
+        if (typeof text === 'number' && kind && kind.includes('status')) text = STATUS[text] || text;
+        out.push({ date, kind: kind || '', text: text == null ? '' : String(text), meter: first(node, 'meter', 'mileage', 'odometer') });
+      }
+      Object.entries(node).forEach(([k, v]) => { if (v && typeof v === 'object') walk(v, k); });
+    };
+    walk(h);
+    const seen = new Set();
+    return out.sort((a, b) => b.date.localeCompare(a.date)).filter(e => { const k = e.date + e.kind + e.text; if (seen.has(k)) return false; seen.add(k); return true; });
+  }
+  function normalizeVehicle(resp) {
+    const d = resp.data || {}, pk = n => (d[n] && d[n].data) || {};
+    const basic = pk('basic'), insp = pk('inspection'), st = pk('status'), rng = insp.next_inspection_range || [];
+    return { source: 'Biluppgifter.se', fetched_at: nowLocal(), regnr: d.attributes?.regno, vin: d.attributes?.vin,
+      make: basic.make, model: basic.model, color: basic.color, vehicle_year: basic.vehicle_year, model_year: basic.model_year,
+      status: STATUS[st.status] || st.status, latest_inspection: dOnly(insp.latest_inspection || ''),
+      inspection_valid_until: dOnly(insp.inspection_valid_until || ''), next_inspection_from: dOnly(rng[0] || ''),
+      next_inspection_to: dOnly(rng[1] || ''), meter: insp.meter, number_of_owners: st.number_of_owners,
+      latest_owner_change: dOnly(st.latest_owner_change || ''), first_registered: dOnly(st.first_registered || ''),
+      first_on_swedish_roads: dOnly(st.first_on_swedish_roads || ''), imported: st.imported, leasing: st.leasing,
+      tax: st.tax, tax_month: st.tax_month, history: parseHistory(d.history) };
+  }
+  function inspectionEntries(info) {
+    const out = (info.history || []).filter(h => /besikt|inspection/i.test(`${h.kind} ${h.text}`)
+        && !/typgodkänn/i.test(`${h.kind} ${h.text}`) && h.inspection_type !== 'typgodkännande')
+      .map(h => ({ date: h.date, km: h.meter, text: h.text, station: h.station, result: h.result }));
+    if (info.latest_inspection && !out.some(e => e.date === info.latest_inspection))
+      out.push({ date: info.latest_inspection, km: info.meter, text: 'Senaste besiktning' });
+    return out;
   }
 
   // ============================================================ SYNK
@@ -159,7 +239,7 @@
     return JSON.stringify(o);
   }
   const pick = (r, keys) => Object.fromEntries(keys.map(k => [k, r[k] ?? null]));
-  const SYNC_CAR = [...CAR_FIELDS, 'photo_uid', 'photo_credit', 'created'];
+  const SYNC_CAR = [...CAR_FIELDS, 'photo_uid', 'photo_credit', 'created', 'vehicle_info'];
   const SYNC_ENTRY = [...ENTRY_FIELDS, 'created'];
 
   // fetchFile(uid, ext) -> Blob|null. eager=true hämtar alla saknade filer direkt (zip-import).
@@ -331,13 +411,40 @@
   }
 
   // ------------------------------------------------------------ utskrift (PDF)
+  // Alla händelser i datumordning: serviceposter + fordonsregistret (samma regler som build_timeline i pdf_export.py)
+  const REG_TITLES = { besiktning: 'Besiktning', ägarbyte: 'Ägarbyte', påställd: 'Påställd', avställd: 'Avställd', annons: 'Annons',
+    registrerad: 'Registrerad', förregistrerad: 'Förregistrerad', tillverkad: 'Tillverkad', avregistrerad: 'Avregistrerad',
+    import: 'Import', skrotad: 'Skrotad' };
+  function timeline(car, entries) {
+    const rows = [], inspDates = new Set(entries.filter(e => (e.types || []).includes('Besiktning')).map(e => e.date));
+    for (const e of entries) {
+      const types = e.types || [], isInsp = types.length === 1 && types[0] === 'Besiktning';
+      let desc = isInsp ? (e.notes || 'Besiktning') : types.join(', ');
+      if (!isInsp && e.notes) desc += ` – ${e.notes}`;
+      rows.push({ date: e.date, km: e.km, event: isInsp ? 'Besiktning' : 'Service', desc, by: /^Besiktning \(från/.test(e.performed_by || '') ? '' : (e.performed_by || ''),
+        cost: e.cost != null ? `${Math.round(e.cost)} kr` : '' });
+    }
+    for (const h of car.vehicle_info?.history || []) {
+      if (h.title && !/^[a-zåäö]+$/i.test(h.title)) continue;
+      if (h.kind === 'besiktning' && inspDates.has(h.date)) continue;
+      let desc = h.text || '';
+      if (h.result && !desc.toLowerCase().startsWith(h.result)) desc = `${h.result[0].toUpperCase() + h.result.slice(1)} – ${desc}`;
+      rows.push({ date: h.approx_month ? h.date.slice(0, 7) : h.date, km: h.meter, event: REG_TITLES[h.kind] || h.title || h.kind,
+        desc, by: h.station || '', cost: '', registry: true });
+    }
+    return rows.sort((a, b) => a.date.localeCompare(b.date) || (a.km || 0) - (b.km || 0));
+  }
+
   async function printBook(car, entries) {
     const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     const km = k => k != null && k !== '' ? Number(k).toLocaleString('sv-SE') + ' km' : '–';
-    let html = `<h1>Servicebok – ${esc(car.name)}</h1><p>${esc([car.model, car.chassis, car.vin].filter(Boolean).join(' · '))}<br>
-      Mätarställning: ${km(car.mileage)} · Utskriven ${new Date().toISOString().slice(0, 10)}</p>
-      <table><tr><th>Datum</th><th>Km</th><th>Åtgärder</th><th>Utfört av</th><th>Kostnad</th></tr>
-      ${entries.map(e => `<tr><td>${esc(e.date)}</td><td>${km(e.km)}</td><td>${esc(e.types.join(', '))}</td><td>${esc(e.performed_by)}</td><td>${e.cost != null ? esc(e.cost) + ' kr' : ''}</td></tr>`).join('')}</table>`;
+    entries = [...entries].sort((a, b) => a.date.localeCompare(b.date) || (a.km || 0) - (b.km || 0));
+    const rows = timeline(car, entries);
+    let html = `<h1>Servicebok – ${esc(car.name)}</h1><p>${esc([car.regnr, car.model, car.chassis, car.vin].filter(Boolean).join(' · '))}<br>
+      Mätarställning: ${km(car.mileage)}${car.next_inspection ? ` · Nästa besiktning senast ${esc(car.next_inspection)}` : ''} · Utskriven ${new Date().toISOString().slice(0, 10)}</p>
+      <h2>Alla händelser</h2><p style="font-size:9pt;color:#666">Äldst först. * = från fordonsregistret (Biluppgifter/Transportstyrelsen).</p>
+      <table><tr><th>Datum</th><th>Km</th><th>Händelse</th><th>Beskrivning</th><th>Utfört av / plats</th><th>Kostnad</th></tr>
+      ${rows.map(r => `<tr><td>${esc(r.date)}</td><td>${r.km ? km(r.km) : ''}</td><td>${esc(r.event)}${r.registry ? ' *' : ''}</td><td>${esc(r.desc)}</td><td>${esc(r.by)}</td><td>${esc(r.cost)}</td></tr>`).join('')}</table>`;
     for (const e of entries) {
       html += `<section class="pb"><h2>${esc(e.date)} · ${km(e.km)}</h2><p><b>Åtgärder:</b> ${esc(e.types.join(', '))}</p>
         ${e.parts ? `<p><b>Delar:</b> ${esc(e.parts)}</p>` : ''}${e.notes ? `<p><b>Anteckningar:</b> ${esc(e.notes)}</p>` : ''}`;
@@ -378,11 +485,45 @@
     async init() {
       if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
       return { platform: 'web', lists: V.lists, service_types: V.service_types, statuses: V.statuses,
-        config: { google_web_client_id: await clientId() }, last_backup: await meta('last_backup') };
+        config: { google_web_client_id: await clientId(), biluppgifter_api_key: (await meta('biluppgifter_api_key')) || '' },
+        last_backup: await meta('last_backup') };
     },
     async save_config(cfg) {
       if ('google_web_client_id' in cfg) await meta('google_web_client_id', (cfg.google_web_client_id || '').trim());
-      return { google_web_client_id: await clientId() };
+      if ('biluppgifter_api_key' in cfg) await meta('biluppgifter_api_key', (cfg.biluppgifter_api_key || '').trim());
+      return { google_web_client_id: await clientId(), biluppgifter_api_key: (await meta('biluppgifter_api_key')) || '' };
+    },
+    async fetch_vehicle_data(id) {
+      const c = await get('cars', id), key = await meta('biluppgifter_api_key');
+      if (!c.regnr) return { ok: false, error: 'Fyll i registreringsnummer under Bil först.' };
+      if (!key) return { ok: false, error: 'API-nyckel till Biluppgifter saknas (Bil → Fordonsdata).' };
+      let r;
+      try {
+        r = await fetch(`https://api.biluppgifter.se/api/v1/vehicle/regno/${encodeURIComponent(c.regnr)}?include=basic,inspection,status,history`,
+          { headers: { Authorization: 'Bearer ' + key, Accept: 'application/json' } });
+      } catch (e) {
+        return { ok: false, error: 'Biluppgifter gick inte att nå från mobilen (tjänsten kan blockera webbläsare). Hämta på datorn i stället – uppgifterna synkas hit.' };
+      }
+      if (!r.ok) return { ok: false, error: ({ 401: 'API-nyckeln godtogs inte.', 404: `Hittade inget fordon med ${c.regnr}.`, 429: 'Kvoten är slut för perioden.' })[r.status] || `Biluppgifter svarade ${r.status}` };
+      const info = normalizeVehicle(await r.json());
+      if (info.vin && c.vin && info.vin.slice(-7) !== c.vin.slice(-7)) info.warning = `VIN i registret (${info.vin}) skiljer sig från bilens sparade VIN (${c.vin}).`;
+      return applyRegistry(c, info);
+    },
+    async set_vehicle_info(id, info) {
+      const c = await get('cars', id);
+      return applyRegistry(c, info);
+    },
+    async import_inspections(id) {
+      const c = await get('cars', id);
+      const have = new Set((await api.list_entries(id)).filter(e => e.types.includes('Besiktning')).map(e => e.date));
+      let n = 0;
+      for (const i of inspectionEntries(c.vehicle_info || {})) {
+        if (have.has(i.date)) continue;
+        await api.save_entry({ car_id: id, date: i.date, km: i.km, types: ['Besiktning'], performed_by: i.station || 'Besiktning (från fordonsregistret)',
+          notes: i.text || '', car_status: 'ej_aktuellt', source: 'register' });
+        n++;
+      }
+      return { imported: n };
     },
     // bilar
     async list_cars() {
@@ -392,6 +533,7 @@
     async save_car(car) {
       const vals = pick(car, CAR_FIELDS);
       if (vals.vin) vals.vin = vals.vin.trim().toUpperCase();
+      if (vals.regnr) vals.regnr = vals.regnr.replace(/[\s-]/g, '').toUpperCase();
       if (!vals.name) vals.name = vals.model || 'Min bil';
       const old = car.id ? await get('cars', car.id) : null;
       const rec = old ? { ...old, ...vals, updated: nowUtc() }
@@ -542,5 +684,5 @@
   wrapped._onChange = fn => { changed = fn; };
   wrapped._justLoggedIn = handleRedirect();
   window.WEBSTORE = wrapped;
-  window.WEBSTORE_INTERNAL = { mergeState, exportState, signature };   // för tester
+  window.WEBSTORE_INTERNAL = { mergeState, exportState, signature, normalizeVehicle };   // för tester
 })();

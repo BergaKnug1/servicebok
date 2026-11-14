@@ -91,6 +91,8 @@ async function renderHome() {
   $('#heroName').textContent = c.name;
   $('#heroModel').textContent = [c.model, c.chassis && `(${c.chassis})`].filter(Boolean).join(' ');
   const facts = [['Reg.nr', c.regnr], ['VIN', c.vin], ['Årsmodell', c.year], ['Färg', [c.paint_code, c.paint_name].filter(Boolean).join(' ')],
+    ['Drivmedel', c.vehicle_info?.fuel], ['Effekt', c.vehicle_info?.power_hp ? `${c.vehicle_info.power_hp} hk${c.vehicle_info.power_kw ? ' (' + c.vehicle_info.power_kw + ' kW)' : ''}` : null],
+    ['Växellåda', c.vehicle_info?.gearbox],
     ['Mätarställning', fmtKm(c.mileage)], ['Antal servicer', S.entries.length]];
   $('#heroFacts').innerHTML = facts.filter(f => f[1]).map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('');
 
@@ -496,12 +498,34 @@ $('#carForm').chassis.onchange = e => {
 };
 $('#btnDecode').onclick = async () => {
   const f = $('#carForm'), d = await call('decode_vin', f.vin.value);
-  const info = d.valid ? [`${d.manufacturer}`, d.year && `årsmodell ${d.year}`, `typnyckel ${d.type_key}`, d.chassis && `chassi ${d.chassis} (${d.source})`].filter(Boolean).join(' · ') : '';
+  // Tre källor: själva VIN-numret, det programmet har lärt sig om typnyckeln, och registeruppgifterna för bilen
+  const cur = S.cars.find(x => x.id === idOf(f.dataset.id));
+  const reg = cur?.vehicle_info && (!cur.vehicle_info.vin || cur.vehicle_info.vin === d.vin) ? cur.vehicle_info : null;
+  const rows = [];
+  if (d.valid) {
+    rows.push(['Tillverkare', d.manufacturer], ['Typnyckel (pos 4–7)', d.type_key], ['Serienummer', d.serial],
+      ['Årsmodell', d.year || 'kodas inte (europeiskt VIN)']);
+    if (d.source) rows.push(['Chassi', d.chassis ? `${d.chassis}${d.chassis_desc ? ' · ' + d.chassis_desc : ''}` : null], ['Modell', d.model],
+      ['Drivmedel', d.fuel], ['Effekt', d.power_hp ? d.power_hp + ' hk' : null], ['Växellåda', d.gearbox]);
+  }
+  if (reg) rows.push(['Färg (registret)', [reg.paint_code, reg.color].filter(Boolean).join(' ') || null],
+    ['Modellår (registret)', reg.model_year || reg.vehicle_year], ['Modell (registret)', reg.model_name || reg.model]);
+  const form = { chassis: f.chassis.value, model: f.model.value, year: f.year.value, paint_code: f.paint_code.value };
+  const filled = [];
+  const set = (field, val, label) => { if (val && !form[field]) { f[field].value = val; filled.push(label); } };
+  if (d.chassis && !form.chassis) { f.chassis.value = d.chassis; f.chassis.onchange({ target: f.chassis }); filled.push('chassi'); }
+  const defModel = S.lists.chassis.find(x => x.code === f.chassis.value)?.desc;
+  const model = reg?.model_name || reg?.model || d.model;
+  if (model && (!form.model || form.model === defModel || f.model.value === defModel)) { f.model.value = model; filled.push('modell'); }
+  set('year', d.year || reg?.model_year || reg?.vehicle_year, 'årsmodell');
+  const code = String(reg?.paint_code || '').toUpperCase();
+  if (code && S.lists.paints.some(p => p.code === code)) set('paint_code', code, 'färg');
+  if (!d.chassis && d.body) f.dataset.body = d.body;
   $('#vinInfo').className = 'msg ' + (d.valid ? 'ok' : 'err');
-  $('#vinInfo').innerHTML = esc(info) + (d.warnings.length ? '<br>' + d.warnings.map(esc).join('<br>') : '') +
-    (d.valid && !d.chassis ? '<br><span class="muted">Chassit går inte att läsa ur VIN. Välj det nedan, så kommer programmet ihåg typnyckeln. Med bilen ansluten läses det automatiskt.</span>' : '');
-  if (d.year) f.year.value = d.year;
-  if (d.chassis) { f.chassis.value = d.chassis; f.chassis.onchange({ target: f.chassis }); if (d.model) f.model.value = d.model; }
+  $('#vinInfo').innerHTML = (rows.length ? `<table>${rows.filter(r => r[1]).map(([k, v]) => `<tr><td class="muted">${k}</td><td><b>${esc(v)}</b></td></tr>`).join('')}</table>` : '')
+    + (d.warnings.length ? '<div class="muted">' + d.warnings.map(esc).join('<br>') + '</div>' : '')
+    + (filled.length ? `<div>✓ Ifyllt: ${filled.join(', ')} – tryck <b>Spara bil</b>.</div>` : '')
+    + (d.valid && !d.source && !reg ? '<div class="muted">Ett VIN säger inte vilket chassi eller vilken modell det är. Klistra in uppgifter från Biluppgifter eller läs bilen via ENET, så kommer programmet ihåg typnyckeln till nästa gång.</div>' : '');
 };
 $('#carForm').onsubmit = async e => {
   e.preventDefault();
@@ -616,7 +640,7 @@ function renderReg() {
     </div>`;
   const f = $('#btnRegFetch'); if (f) f.onclick = async () => {
     f.disabled = true; f.textContent = 'Hämtar…';
-    try { await call('fetch_vehicle_data', c.id); await loadCars(c.id); toast('✓ Registeruppgifter hämtade'); renderHome(); }
+    try { const saved = await call('fetch_vehicle_data', c.id); await loadCars(c.id); toast('✓ Registeruppgifter hämtade' + filledText(saved), 6000); renderHome(); }
     catch { f.disabled = false; f.textContent = '🔄 Hämta från registret'; }
   };
   const im = $('#btnRegImport'); if (im) im.onclick = async () => {
@@ -633,8 +657,12 @@ const PASTE_LABELS = { latest_inspection: 'Senaste besiktning', inspection_valid
   number_of_owners: 'Antal ägare', latest_owner_change: 'Senaste ägarbyte', first_registered: 'I trafik första gången',
   first_on_swedish_roads: 'I Sverige sedan', tax: 'Fordonsskatt', status: 'Status', regnr: 'Registreringsnummer',
   vin: 'VIN / chassinummer', model_year: 'Modellår', vehicle_year: 'Fordonsår', color: 'Färg',
+  paint_code: 'Färgkod', make: 'Märke', model_name: 'Modell', fuel: 'Drivmedel', power_hp: 'Effekt (hk)', power_kw: 'Effekt (kW)',
+  gearbox: 'Växellåda', body_type: 'Kaross',
   latest_result: 'Senaste resultat', latest_station: 'Besiktningsstation', inspections_count: 'Antal besiktningar',
   inspections_failed: 'Varav ej godkända', owner_changes: 'Ägarbyten', manufactured: 'Tillverkad', last_ad: 'Senaste annons' };
+const FILLED_SV = { vin: 'VIN', regnr: 'reg.nr', model: 'modell', year: 'årsmodell', paint_code: 'färgkod', paint_name: 'färg', body: 'kaross' };
+const filledText = saved => saved?.filled?.length ? ` · Ifyllt i Min bil: ${saved.filled.map(k => FILLED_SV[k] || k).join(', ')}` : '';
 async function pasteVehicleInfo(c) {
   const html = `<ol class="muted" style="margin:0 0 10px 18px;padding:0">
       <li>Öppna bilens sida hos <b>Biluppgifter</b> eller <b>Transportstyrelsen</b> (eller sms-svaret från 71640).</li>
@@ -684,9 +712,9 @@ async function pasteVehicleInfo(c) {
   }
   if (!c.year && (fields.model_year || fields.vehicle_year)) carUpd.year = fields.model_year || fields.vehicle_year;
   if (Object.keys(carUpd).length) await call('save_car', { ...c, ...carUpd });
-  await call('set_vehicle_info', c.id, info);
+  const saved = await call('set_vehicle_info', c.id, info);
   await loadCars(c.id); renderHome();
-  toast(`✓ Sparade ${Object.keys(fields).length} uppgifter${history ? ` och ${history.length} historikhändelser` : ''}`);
+  toast(`✓ Sparade ${Object.keys(fields).length} uppgifter${history ? ` och ${history.length} historikhändelser` : ''}${filledText(saved)}`, 6000);
 }
 
 $('#regForm').onsubmit = async e => {
