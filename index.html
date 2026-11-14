@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1722">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Servicebok">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Servicebok</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<aside class="sidebar">
+  <div class="brand"><span class="logo">⚙</span> <span class="brand-name">Servicebok</span></div>
+  <label class="car-picker">
+    <span>Bil</span>
+    <select id="carSelect"></select>
+  </label>
+  <nav id="nav">
+    <a data-page="home" class="active"><i>🏠</i><span>Min bil</span></a>
+    <a data-page="log"><i>📖</i><span>Servicebok</span></a>
+    <a data-page="entry"><i>➕</i><span>Ny service</span></a>
+    <a data-page="live" class="desktop-only"><i>🔌</i><span>Bilen live</span></a>
+    <a data-page="explore" class="desktop-only"><i>🔎</i><span>Utforska</span></a>
+    <a data-page="backup"><i>☁️</i><span>Synk & backup</span></a>
+    <a data-page="car"><i>🚗</i><span>Bil</span></a>
+  </nav>
+  <div class="sidebar-foot">
+    <div id="syncBadge" class="badge off" hidden>☁ Drive</div>
+    <div id="connBadge" class="badge off desktop-only">Ej ansluten</div>
+    <button id="themeBtn" class="ghost small">🌓 Tema</button>
+  </div>
+</aside>
+
+<main id="main">
+  <!-- MIN BIL -->
+  <section id="page-home" class="page active">
+    <div class="hero card">
+      <div><div class="hero-img" id="heroImg"></div><div id="heroCredit" class="credit"></div></div>
+      <div class="hero-info">
+        <h1 id="heroName">–</h1>
+        <div class="muted" id="heroModel"></div>
+        <dl class="facts" id="heroFacts"></dl>
+        <div class="row gap">
+          <button class="primary" data-goto="entry">➕ Ny service</button>
+          <button class="ghost" data-goto="car">Redigera bil</button>
+        </div>
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <h2>Servicebehov (CBS)</h2>
+        <div id="cbsList" class="cbs"></div>
+      </div>
+      <div class="card">
+        <h2>Senaste servicer</h2>
+        <ol id="timeline" class="timeline"></ol>
+      </div>
+    </div>
+  </section>
+
+  <!-- SERVICEBOK -->
+  <section id="page-log" class="page">
+    <div class="page-head">
+      <h1>Servicebok</h1>
+      <input id="logSearch" type="search" placeholder="Sök…">
+      <button class="primary" data-goto="entry">➕ Ny service</button>
+    </div>
+    <div id="logList" class="entries"></div>
+  </section>
+
+  <!-- NY/REDIGERA SERVICE -->
+  <section id="page-entry" class="page">
+    <div class="page-head"><h1 id="entryTitle">Ny service</h1></div>
+    <form id="entryForm" class="card form">
+      <div class="grid3">
+        <label>Datum<input type="date" name="date" required></label>
+        <label>Mätarställning (km)<input type="number" name="km" min="0" step="1"></label>
+        <label>Utfört av<input name="performed_by" placeholder="T.ex. Egen service"></label>
+      </div>
+      <label>Åtgärder</label>
+      <div id="typeChips" class="chips"></div>
+      <div class="grid2">
+        <label>Delar / artikelnummer<textarea name="parts" rows="3" placeholder="Olja 5W-30 LL-04 6,5 l, oljefilter 11428575211 …"></textarea></label>
+        <label>Anteckningar<textarea name="notes" rows="3"></textarea></label>
+      </div>
+      <div class="grid3">
+        <label>Kostnad (kr)<input type="number" name="cost" min="0" step="0.01"></label>
+        <label>Status i bilen<select name="car_status"></select></label>
+      </div>
+      <label>Kvitton, bilder och dokument</label>
+      <div class="row gap wrap">
+        <button type="button" class="primary" id="btnCamera">📷 Fota kvitto</button>
+        <button type="button" class="ghost" id="pickFiles2">📎 Välj filer</button>
+        <input type="file" id="cameraInput" accept="image/*" capture="environment" hidden>
+      </div>
+      <div id="dropZone" class="drop desktop-only">
+        <div>Dra och släpp filer här, eller <button type="button" id="pickFiles" class="link">välj filer</button></div>
+      </div>
+      <input type="file" id="fileInput" multiple hidden>
+      <div id="attList" class="thumbs"></div>
+      <div class="row gap end">
+        <button type="button" class="danger ghost" id="entryDelete" hidden>Ta bort</button>
+        <span class="spacer"></span>
+        <button type="button" class="ghost" data-goto="log">Avbryt</button>
+        <button type="submit" class="primary">Spara</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- BILEN LIVE -->
+  <section id="page-live" class="page">
+    <div class="page-head"><h1>Bilen live</h1></div>
+    <div class="card">
+      <p class="muted">Anslut ENET-kabeln och slå på tändningen (motorn av, gärna med batteriladdare).
+        Börja alltid med <b>Läs bilen</b>. Varje läsning sparas som en ögonblicksbild.</p>
+      <div class="row gap">
+        <button class="primary" id="btnConnect">🔌 Anslut via ENET</button>
+        <button class="ghost" id="btnDemo">🧪 Demoläge</button>
+        <button class="ghost" id="btnDisconnect">Koppla från</button>
+        <span class="spacer"></span>
+        <button class="primary" id="btnRead" disabled>📥 Läs bilen</button>
+      </div>
+      <div id="liveMsg" class="msg"></div>
+    </div>
+    <div id="liveResult"></div>
+  </section>
+
+  <!-- UTFORSKA -->
+  <section id="page-explore" class="page">
+    <div class="page-head"><h1>Utforska styrenheter</h1></div>
+    <div class="card">
+      <p class="muted">Här hittar du vilka EDIABAS-jobb din bil har för servicehistorik och CBS. Endast
+        läsjobb kan köras. Fyll sedan i rätt namn i profilfilen (<code>profiles/…json</code>).</p>
+      <div class="row gap">
+        <input id="sgbdPattern" value="cas4* d_cas* kombi* d_kombi* fem* d_fem*" style="flex:1">
+        <button class="ghost" id="btnSgbd">Lista SGBD</button>
+      </div>
+      <div class="row gap wrap" id="sgbdList"></div>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <div class="row gap">
+          <h2 style="flex:1">Jobb <span id="jobSgbd" class="muted"></span></h2>
+          <input id="jobFilter" placeholder="Filter, t.ex. SERVICE|HISTORIE|CBS" value="SERVICE|HIST|CBS|KILOMETER|FA_|FG_">
+        </div>
+        <div id="jobList" class="joblist"></div>
+      </div>
+      <div class="card">
+        <div class="row gap">
+          <h2 style="flex:1">Resultat <span id="resTitle" class="muted"></span></h2>
+          <input id="jobArgs" placeholder="Argument (valfritt)">
+          <button class="ghost small" id="btnSaveRes">Spara</button>
+        </div>
+        <pre id="jobResult" class="pre"></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- BACKUP -->
+  <section id="page-backup" class="page">
+    <div class="page-head"><h1>Synk & backup</h1></div>
+    <div class="card" id="driveCard">
+      <h2>☁️ Google Drive</h2>
+      <p class="muted">Synkar serviceboken, kvitton och bilder mellan datorn och mobilen via en mapp
+        <b>Servicebok</b> i din Google Drive. Appen ser bara filer den själv har skapat.</p>
+      <div id="driveStatus" class="msg"></div>
+      <div class="row gap wrap">
+        <button class="primary" id="btnDriveConnect">Logga in på Google</button>
+        <button class="primary" id="btnDriveSync" hidden>🔄 Synka nu</button>
+        <button class="ghost" id="btnDriveDisconnect" hidden>Logga ut</button>
+      </div>
+      <details style="margin-top:12px">
+        <summary class="muted">Google-inställningar (görs en gång – se README)</summary>
+        <form id="googleForm" class="form" style="margin-top:10px">
+          <label>Webbklient-ID (för mobilen)<input name="google_web_client_id" placeholder="xxxx.apps.googleusercontent.com"></label>
+          <label class="desktop-only">Skrivbordsklient-ID<input name="google_client_id" placeholder="xxxx.apps.googleusercontent.com"></label>
+          <label class="desktop-only">Skrivbordsklient-hemlighet<input name="google_client_secret" type="password"></label>
+          <button class="ghost" type="submit">Spara</button>
+        </form>
+      </details>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <h2>💾 Säkerhetskopia</h2>
+        <p class="muted">Allt: poster, kvitton, bilder och ögonblicksbilder av bilen i en zip-fil.
+          Fungerar även utan Google Drive. <b>Importera</b> slår ihop med det du har – inget skrivs över.</p>
+        <div class="row gap wrap">
+          <button class="primary" id="btnBackup">Skapa backup…</button>
+          <button class="ghost" id="btnImport">Importera backup…</button>
+        </div>
+        <div id="backupMsg" class="msg"></div>
+      </div>
+      <div class="card">
+        <h2>📄 Servicebok som PDF</h2>
+        <p class="muted">Snygg utskrift med alla poster och kvittobilder, t.ex. vid försäljning.</p>
+        <button class="primary" id="btnPdf">Exportera PDF…</button>
+        <div id="pdfMsg" class="msg"></div>
+      </div>
+    </div>
+    <div class="card desktop-only"><h2>Datamapp</h2><code id="dataDir"></code>
+      <button class="ghost small" id="btnOpenData">Öppna mappen</button></div>
+  </section>
+
+  <!-- BILINSTÄLLNINGAR -->
+  <section id="page-car" class="page">
+    <div class="page-head"><h1 id="carTitle">Bil</h1>
+      <button class="ghost" id="btnNewCar">➕ Lägg till bil</button></div>
+    <div class="grid2">
+      <form id="carForm" class="card form">
+        <label>Namn<input name="name" placeholder="T.ex. Familjebilen"></label>
+        <div class="row gap">
+          <label style="flex:1">VIN<input name="vin" maxlength="17" placeholder="17 tecken"></label>
+          <button type="button" class="ghost" id="btnDecode" style="align-self:end">Avkoda</button>
+        </div>
+        <div id="vinInfo" class="msg"></div>
+        <div class="grid2">
+          <label>Chassi<select name="chassis"></select></label>
+          <label>Modell<input name="model" placeholder="T.ex. 520d Touring"></label>
+          <label>Årsmodell<input type="number" name="year"></label>
+          <label>Färg<select name="paint_code"></select></label>
+          <label>Mätarställning (km)<input type="number" name="mileage"></label>
+          <label class="desktop-only">Bilkommunikation<select name="profile"></select></label>
+        </div>
+        <div class="row gap end">
+          <button type="button" class="danger ghost" id="btnDeleteCar">Ta bort bil</button>
+          <span class="spacer"></span>
+          <button type="submit" class="primary">Spara bil</button>
+        </div>
+      </form>
+      <div class="card">
+        <h2>Bild</h2>
+        <div id="carPreview" class="hero-img small"></div>
+        <div id="photoCredit" class="credit"></div>
+        <div class="row gap wrap">
+          <button class="primary" id="btnFindPhoto">🔍 Hämta bild på riktig bil</button>
+          <button class="ghost" id="btnPhoto">📷 Eget foto</button>
+          <button class="ghost" id="btnPhotoRemove">Ta bort bild</button>
+          <input type="file" id="photoInput" accept="image/*" hidden>
+        </div>
+        <div id="photoResults" class="photo-grid"></div>
+        <h2 style="margin-top:24px" class="desktop-only">Programinställningar</h2>
+        <form id="cfgForm" class="form desktop-only">
+          <label>EDIABAS-mapp<input name="ediabas_dir"></label>
+          <label>32-bitars Python (python.exe)<input name="python32" placeholder="C:\Python312-32\python.exe"></label>
+          <button class="ghost" type="submit">Spara inställningar</button>
+        </form>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="modal" class="modal" hidden>
+  <div class="modal-box">
+    <h2 id="modalTitle"></h2>
+    <div id="modalBody"></div>
+    <div class="row gap end">
+      <button class="ghost" id="modalCancel">Avbryt</button>
+      <button class="primary" id="modalOk">OK</button>
+    </div>
+  </div>
+</div>
+<div id="viewer" class="viewer" hidden><img id="viewerImg"></div>
+<div id="toast" class="toast"></div>
+
+<script src="config.js"></script>
+<script src="vin_data.js"></script>
+<script src="vendor/jszip.min.js"></script>
+<script src="webstore.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
