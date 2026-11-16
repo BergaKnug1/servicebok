@@ -475,7 +475,9 @@ function renderCarForm(car = S.car) {
   L.chassis.forEach(c => { const g = c.series ? (/^\d$/.test(c.series) ? `${c.series}-serie` : c.series) : 'Övrigt'; (groups[g] = groups[g] || []).push(c); });
   f.chassis.innerHTML = opt('', '– välj –', car.chassis) + Object.entries(groups).map(([g, cs]) =>
     `<optgroup label="${esc(g)}">${cs.map(c => opt(c.code, `${c.show || c.code} · ${c.desc}${yearsText(c) ? ' (' + yearsText(c) + ')' : ''}`, car.chassis)).join('')}</optgroup>`).join('');
-  f.paint_code.innerHTML = opt('', 'Egen kulör', car.paint_code) + L.paints.map(p => opt(p.code, `${p.code} · ${p.name}`, car.paint_code)).join('');
+  f.paint_code.value = car.paint_code || '';
+  f.dataset.paintName = car.paint_name || '';
+  showPaintInfo();
   f.dataset.body = car.body || 'sedan';
   f.profile.innerHTML = L.profiles.map(p => opt(p.id, p.name, car.profile)).join('');
   $('#vinInfo').textContent = '';
@@ -485,10 +487,15 @@ function renderCarForm(car = S.car) {
 }
 function formCar() {
   const f = $('#carForm');
-  const p = S.lists.paints.find(x => x.code === f.paint_code.value);
+  const typed = f.paint_code.value.trim().toUpperCase();
+  const code = /^[A-Z0-9]{1,4}$/.test(typed) ? typed : null;   // ett halvskrivet namn sparas inte som kod
+  const p = S.lists.paints.find(x => x.code === code);
+  const cur = S.cars.find(x => x.id === idOf(f.dataset.id));
+  // Okänd kod eller ingen kod: behåll färgnamnet bilen redan har (t.ex. "Svart metallic" från registret)
+  const keepName = !p && (!code || code === cur?.paint_code) ? (f.dataset.paintName || null) : null;
   return { id: idOf(f.dataset.id), name: f.name.value, vin: f.vin.value, chassis: f.chassis.value,
-    model: f.model.value, year: Number(f.year.value) || null, body: f.dataset.body, paint_code: f.paint_code.value || null,
-    paint_name: p ? p.name : null, paint_hex: p ? p.hex : null, profile: f.profile.value || null, mileage: Number(f.mileage.value) || null,
+    model: f.model.value, year: Number(f.year.value) || null, body: f.dataset.body, paint_code: code,
+    paint_name: p ? p.name : keepName, paint_hex: p ? p.hex : (cur?.paint_hex || null), profile: f.profile.value || null, mileage: Number(f.mileage.value) || null,
     regnr: f.regnr.value.trim() || null, next_inspection: f.next_inspection.value || null };
 }
 function updatePreview() {
@@ -540,6 +547,53 @@ function modelText(raw, c) {
   }
   return c.desc;
 }
+// ------------------------------------------------- färgkoder
+function showPaintInfo() {
+  const f = $('#carForm'), code = f.paint_code.value.trim().toUpperCase();
+  const p = S.lists.paints.find(x => x.code === code);
+  $('#paintInfo').innerHTML = p ? `<span class="swatch" style="background:${p.hex}"></span>${esc(p.name)}`
+    : code && !/^[A-Z0-9]{1,4}$/.test(code) ? '<span class="muted">Välj en färg i listan</span>'
+    : code ? `<span class="muted">Okänd kod – sparas ändå${f.dataset.paintName ? ' (' + esc(f.dataset.paintName) + ')' : ''}</span>`
+    : (f.dataset.paintName ? `<span class="muted">${esc(f.dataset.paintName)} (ingen kod)</span>` : '');
+}
+function paintSuggestions(raw) {
+  const q = raw.trim().toLowerCase(); if (!q) return [];
+  const out = [];
+  for (const p of S.lists.paints) {
+    const c = p.code.toLowerCase(), n = p.name.toLowerCase();
+    let s = c === q ? 200 : c.startsWith(q) ? 120 : 0;
+    if (!s && q.length >= 3 && n.includes(q)) s = n.split(/\s+/).some(w => w.startsWith(q)) ? 80 : 50;
+    if (s) out.push([s, p]);
+  }
+  return out.sort((a, b) => b[0] - a[0] || a[1].code.localeCompare(b[1].code, 'sv', { numeric: true })).slice(0, 12).map(x => x[1]);
+}
+let pIdx = -1, pList = [];
+function renderPaintSuggest() {
+  const box = $('#paintSuggest');
+  pList = paintSuggestions($('#carForm').paint_code.value);
+  box.hidden = !pList.length;
+  box.innerHTML = pList.map((p, i) => `<div data-i="${i}" class="${i === pIdx ? 'on' : ''}"><span class="swatch" style="background:${p.hex}"></span><b>${esc(p.code)}</b><span>${esc(p.name)}</span></div>`).join('');
+  $$('#paintSuggest div').forEach(d => d.onmousedown = e => { e.preventDefault(); pickPaint(+d.dataset.i); });
+}
+function pickPaint(i) {
+  const p = pList[i]; if (!p) return;
+  const f = $('#carForm'); f.paint_code.value = p.code; f.dataset.paintName = p.name;
+  $('#paintSuggest').hidden = true; pIdx = -1; showPaintInfo();
+}
+{
+  const pc = $('#carForm').paint_code;
+  pc.addEventListener('input', () => { pIdx = -1; renderPaintSuggest(); showPaintInfo(); });
+  pc.addEventListener('focus', renderPaintSuggest);
+  pc.addEventListener('blur', () => setTimeout(() => { $('#paintSuggest').hidden = true; }, 150));
+  pc.addEventListener('keydown', e => {
+    if ($('#paintSuggest').hidden) return;
+    if (e.key === 'ArrowDown') { pIdx = Math.min(pIdx + 1, pList.length - 1); renderPaintSuggest(); e.preventDefault(); }
+    else if (e.key === 'ArrowUp') { pIdx = Math.max(pIdx - 1, 0); renderPaintSuggest(); e.preventDefault(); }
+    else if (e.key === 'Enter' && pIdx >= 0) { pickPaint(pIdx); e.preventDefault(); }
+    else if (e.key === 'Escape') $('#paintSuggest').hidden = true;
+  });
+}
+
 let sugIdx = -1, sugList = [];
 function renderSuggest() {
   const box = $('#modelSuggest'), inp = $('#carForm').model;
@@ -598,7 +652,7 @@ $('#btnDecode').onclick = async () => {
   if (model && (!form.model || form.model === defModel || f.model.value === defModel)) { f.model.value = model; filled.push('modell'); }
   set('year', d.year || reg?.model_year || reg?.vehicle_year, 'årsmodell');
   const code = String(reg?.paint_code || '').toUpperCase();
-  if (code && S.lists.paints.some(p => p.code === code)) set('paint_code', code, 'färg');
+  if (code && S.lists.paints.some(p => p.code === code)) { set('paint_code', code, 'färg'); showPaintInfo(); }
   if (!d.chassis && d.body) f.dataset.body = d.body;
   $('#vinInfo').className = 'msg ' + (d.valid ? 'ok' : 'err');
   $('#vinInfo').innerHTML = (rows.length ? `<table>${rows.filter(r => r[1]).map(([k, v]) => `<tr><td class="muted">${k}</td><td><b>${esc(v)}</b></td></tr>`).join('')}</table>` : '')
