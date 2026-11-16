@@ -89,10 +89,11 @@ async function renderHome() {
   $('#heroImg').innerHTML = carImageHtml(c);
   $('#heroCredit').textContent = c.photo_url ? (c.photo_credit || '') : '';
   $('#heroName').textContent = c.name;
-  $('#heroModel').textContent = [c.model, c.chassis && `(${c.chassis})`].filter(Boolean).join(' ');
+  const ch = S.lists.chassis?.find(x => x.code === c.chassis);
+  $('#heroModel').textContent = [c.model, c.chassis && `(${ch?.show || c.chassis}${ch && yearsText(ch) ? ', ' + yearsText(ch) : ''})`].filter(Boolean).join(' ');
   const facts = [['Reg.nr', c.regnr], ['VIN', c.vin], ['Årsmodell', c.year], ['Färg', [c.paint_code, c.paint_name].filter(Boolean).join(' ')],
     ['Drivmedel', c.vehicle_info?.fuel], ['Effekt', c.vehicle_info?.power_hp ? `${c.vehicle_info.power_hp} hk${c.vehicle_info.power_kw ? ' (' + c.vehicle_info.power_kw + ' kW)' : ''}` : null],
-    ['Växellåda', c.vehicle_info?.gearbox],
+    ['Växellåda', c.vehicle_info?.gearbox], ['Drivning', c.vehicle_info?.drive],
     ['Mätarställning', fmtKm(c.mileage)], ['Antal servicer', S.entries.length]];
   $('#heroFacts').innerHTML = facts.filter(f => f[1]).map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('');
 
@@ -469,7 +470,11 @@ function renderCarForm(car = S.car) {
   f.year.value = car.year || ''; f.mileage.value = car.mileage || '';
   f.regnr.value = car.regnr || ''; f.next_inspection.value = car.next_inspection || '';
   $('#regForm').biluppgifter_api_key.value = S.config.biluppgifter_api_key || '';
-  f.chassis.innerHTML = opt('', '– välj –', car.chassis) + L.chassis.map(c => opt(c.code, `${c.code} · ${c.desc}`, car.chassis)).join('');
+  // Chassin grupperade per serie, med produktionsår
+  const groups = {};
+  L.chassis.forEach(c => { const g = c.series ? (/^\d$/.test(c.series) ? `${c.series}-serie` : c.series) : 'Övrigt'; (groups[g] = groups[g] || []).push(c); });
+  f.chassis.innerHTML = opt('', '– välj –', car.chassis) + Object.entries(groups).map(([g, cs]) =>
+    `<optgroup label="${esc(g)}">${cs.map(c => opt(c.code, `${c.show || c.code} · ${c.desc}${yearsText(c) ? ' (' + yearsText(c) + ')' : ''}`, car.chassis)).join('')}</optgroup>`).join('');
   f.paint_code.innerHTML = opt('', 'Egen kulör', car.paint_code) + L.paints.map(p => opt(p.code, `${p.code} · ${p.name}`, car.paint_code)).join('');
   f.dataset.body = car.body || 'sedan';
   f.profile.innerHTML = L.profiles.map(p => opt(p.id, p.name, car.profile)).join('');
@@ -491,6 +496,79 @@ function updatePreview() {
   $('#carPreview').innerHTML = carImageHtml(cur || {});
   $('#photoCredit').textContent = cur?.photo_url ? (cur.photo_credit || '') : '';
 }
+// ------------------------------------------------- modellförslag
+const yearsText = c => c.years?.[0] ? `${c.years[0]}–${c.years[1] || 'idag'}` : '';
+function modelSuggestions(raw) {
+  const q = raw.toLowerCase().trim();
+  if (q.length < 2) return [];
+  const code = (q.match(/\b([efg]\d{2}(?:\/\d)?)/) || [])[1];
+  const xz = q.match(/\b([xz])\s?(\d)\b/);
+  const m = q.match(/\bm\s?([1-8])\b/);
+  const num = q.match(/\b([1-8])(?:\d{2})?\s?(?:[a-z]{1,3})?\b|\b([1-8])[\s-]*serie/);
+  const series = xz ? (xz[1] + xz[2]).toUpperCase() : m ? m[1] : num ? (num[1] || num[2]) : null;
+  const yearM = q.match(/\b(19[5-9]\d|20[0-4]\d)\b/), year = yearM ? +yearM[1] : null;
+  const body = /touring|kombi|herrgård/.test(q) ? 'touring' : /cab|cabriolet|roadster/.test(q) ? 'cab' : /coup[eé]/.test(q) ? 'coup'
+    : /compact/.test(q) ? 'compact' : /\bgt\b|gran turismo/.test(q) ? 'gran turismo' : /sedan/.test(q) ? 'sedan' : null;
+  const out = [];
+  for (const c of S.lists.chassis) {
+    if (c.code === 'Annan') continue;
+    let s = 0;
+    const show = (c.show || c.code).toLowerCase(), desc = c.desc.toLowerCase();
+    if (code) { if (show === code || c.code.toLowerCase() === code) s += 120; else if (show.startsWith(code)) s += 90; else continue; }
+    if (series) {
+      const cs = c.series || '';
+      if (cs === series || (m && cs === 'M' + m[1])) s += 50;
+      else if (!code) continue;
+    }
+    if (!code && !series) { if (desc.includes(q)) s += 30; else continue; }
+    if (body) s += (desc.includes(body) || (body === 'cab' && /cabriolet|roadster/.test(desc))) ? 25 : -15;
+    if (m && c.series === 'M' + m[1]) s += 20;
+    if (year && c.years?.[0]) s += (year >= c.years[0] && year <= (c.years[1] || 2100)) ? 40 : -30;
+    out.push([s, c]);
+  }
+  return out.sort((a, b) => b[0] - a[0] || (a[1].years?.[0] || 0) - (b[1].years?.[0] || 0)).slice(0, 10).map(x => x[1]);
+}
+// Behåll det användaren skrev om det ser ut som en modellbeteckning (325i, 530d xDrive, M3), annars chassits beskrivning
+function modelText(raw, c) {
+  const q = raw.replace(/\b(19[5-9]\d|20[0-4]\d)\b/g, '').replace(/\s{2,}/g, ' ').trim();
+  if (/\b(?:[1-8]\d{2}[a-z]{0,3}|m[1-8]|x[1-7]|z[1-8])\b/i.test(q) && !/^[efg]\d{2}$/i.test(q)) {
+    const fixed = q.replace(/\b([1-8]\d{2})([a-z]{0,3})\b/gi, (_, n, l) => n + l.toLowerCase())
+      .replace(/\b(m|x|z)([1-8])\b/gi, (_, l, n) => l.toUpperCase() + n)
+      .replace(/\b(touring|sedan|coupé|coupe|cabriolet|compact|xdrive|sdrive)\b/gi, w => ({ xdrive: 'xDrive', sdrive: 'sDrive' })[w.toLowerCase()] || w[0].toUpperCase() + w.slice(1).toLowerCase());
+    return /touring|sedan|coup|cabriolet|compact|roadster|gran/i.test(fixed) || !/touring|cabriolet|coupé|compact/i.test(c.desc) || c.desc.includes('/')
+      ? fixed : `${fixed} ${c.desc.replace(/^\d-serie\s*/, '')}`;
+  }
+  return c.desc;
+}
+let sugIdx = -1, sugList = [];
+function renderSuggest() {
+  const box = $('#modelSuggest'), inp = $('#carForm').model;
+  sugList = modelSuggestions(inp.value);
+  box.hidden = !sugList.length;
+  box.innerHTML = sugList.map((c, i) => `<div data-i="${i}" class="${i === sugIdx ? 'on' : ''}"><b>${esc(c.show || c.code)}</b><span>${esc(c.desc)}</span><span class="yrs">${yearsText(c)}${c.profile ? ' · 🔌' : ''}</span></div>`).join('');
+  $$('#modelSuggest div').forEach(d => d.onmousedown = e => { e.preventDefault(); pickSuggest(+d.dataset.i); });
+}
+function pickSuggest(i) {
+  const c = sugList[i]; if (!c) return;
+  const f = $('#carForm'), typed = f.model.value;
+  f.chassis.value = c.code; f.dataset.body = c.body; f.profile.value = c.profile ?? '';
+  f.model.value = modelText(typed, c);
+  const y = typed.match(/\b(19[5-9]\d|20[0-4]\d)\b/);
+  if (y && !f.year.value) f.year.value = y[1];
+  $('#modelSuggest').hidden = true; sugIdx = -1;
+  toast(`Chassi ${c.show || c.code} (${c.desc}${yearsText(c) ? ', ' + yearsText(c) : ''}) valt – tryck Spara bil`);
+}
+$('#carForm').model.addEventListener('input', () => { sugIdx = -1; renderSuggest(); });
+$('#carForm').model.addEventListener('focus', renderSuggest);
+$('#carForm').model.addEventListener('blur', () => setTimeout(() => { $('#modelSuggest').hidden = true; }, 150));
+$('#carForm').model.addEventListener('keydown', e => {
+  if ($('#modelSuggest').hidden) return;
+  if (e.key === 'ArrowDown') { sugIdx = Math.min(sugIdx + 1, sugList.length - 1); renderSuggest(); e.preventDefault(); }
+  else if (e.key === 'ArrowUp') { sugIdx = Math.max(sugIdx - 1, 0); renderSuggest(); e.preventDefault(); }
+  else if (e.key === 'Enter' && sugIdx >= 0) { pickSuggest(sugIdx); e.preventDefault(); }
+  else if (e.key === 'Escape') $('#modelSuggest').hidden = true;
+});
+
 $('#carForm').chassis.onchange = e => {
   const c = S.lists.chassis.find(x => x.code === e.target.value); if (!c) return;
   const f = $('#carForm'); f.dataset.body = c.body; f.profile.value = c.profile ?? '';
@@ -506,9 +584,10 @@ $('#btnDecode').onclick = async () => {
     rows.push(['Tillverkare', d.manufacturer], ['Typnyckel (pos 4–7)', d.type_key], ['Serienummer', d.serial],
       ['Årsmodell', d.year || 'kodas inte (europeiskt VIN)']);
     if (d.source) rows.push(['Chassi', d.chassis ? `${d.chassis}${d.chassis_desc ? ' · ' + d.chassis_desc : ''}` : null], ['Modell', d.model],
-      ['Drivmedel', d.fuel], ['Effekt', d.power_hp ? d.power_hp + ' hk' : null], ['Växellåda', d.gearbox]);
+      ['Drivmedel', d.fuel], ['Effekt', d.power_hp ? d.power_hp + ' hk' : null], ['Växellåda', d.gearbox], ['Drivning', d.drive]);
   }
-  if (reg) rows.push(['Färg (registret)', [reg.paint_code, reg.color].filter(Boolean).join(' ') || null],
+  const okColor = PasteParser.VALID.color.test(String(reg?.color || '').trim()) ? reg.color : null;
+  if (reg) rows.push(['Färg (registret)', [reg.paint_code, okColor].filter(Boolean).join(' ') || null],
     ['Modellår (registret)', reg.model_year || reg.vehicle_year], ['Modell (registret)', reg.model_name || reg.model]);
   const form = { chassis: f.chassis.value, model: f.model.value, year: f.year.value, paint_code: f.paint_code.value };
   const filled = [];
@@ -658,7 +737,7 @@ const PASTE_LABELS = { latest_inspection: 'Senaste besiktning', inspection_valid
   first_on_swedish_roads: 'I Sverige sedan', tax: 'Fordonsskatt', status: 'Status', regnr: 'Registreringsnummer',
   vin: 'VIN / chassinummer', model_year: 'Modellår', vehicle_year: 'Fordonsår', color: 'Färg',
   paint_code: 'Färgkod', make: 'Märke', model_name: 'Modell', fuel: 'Drivmedel', power_hp: 'Effekt (hk)', power_kw: 'Effekt (kW)',
-  gearbox: 'Växellåda', body_type: 'Kaross',
+  gearbox: 'Växellåda', body_type: 'Kaross', drive: 'Drivning',
   latest_result: 'Senaste resultat', latest_station: 'Besiktningsstation', inspections_count: 'Antal besiktningar',
   inspections_failed: 'Varav ej godkända', owner_changes: 'Ägarbyten', manufactured: 'Tillverkad', last_ad: 'Senaste annons' };
 const FILLED_SV = { vin: 'VIN', regnr: 'reg.nr', model: 'modell', year: 'årsmodell', paint_code: 'färgkod', paint_name: 'färg', body: 'kaross' };

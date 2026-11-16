@@ -211,6 +211,15 @@ body.web .desktop-only { display: none !important; }
   #printView figure { margin: 8px 0; }
 }
 
+/* Modellförslag */
+.suggest-wrap { position: relative; }
+.suggest { position: absolute; top: 100%; left: 0; right: 0; z-index: 30; margin-top: 4px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.18); max-height: 320px; overflow: auto; }
+.suggest div { padding: 8px 12px; cursor: pointer; color: var(--text); font-weight: 400; display: flex; gap: 8px; align-items: baseline; }
+.suggest div b { min-width: 52px; }
+.suggest div .yrs { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.suggest div.on, .suggest div:hover { background: var(--chip); }
+
 /* Besiktning & register */
 .reg-top { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 .plate { font: 700 20px/1 "Segoe UI", system-ui, sans-serif; letter-spacing: .08em; background: #fff; color: #111;

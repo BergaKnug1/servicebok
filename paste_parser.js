@@ -63,13 +63,41 @@
     ['power_hp', /^(?:effekt|motoreffekt|hästkrafter)(?![a-zåäö])/i, 'hp'],
     ['gearbox', /^(?:växellåda|transmission)(?![a-zåäö])/i, 'text'],
     ['body_type', /^(?:kaross(?:eri)?|karosstyp|chassityp)(?![a-zåäö])/i, 'text'],
+    ['drive', /^(?:drivning|drivlina|hjuldrift)(?![a-zåäö])/i, 'text'],
   ];
 
-  // Text efter rubriken på samma rad (för sms där allt står på en rad), annars nästa rad
-  function valueNear(lines, i, re) {
+  // Vad ett värde får se ut som. Används för att hitta rätt rad oavsett om sidan har värdet
+  // före eller efter rubriken (Biluppgifter visar ofta stort värde ovanför en liten rubrik).
+  const VALID = {
+    fuel: /^(?:bensin|diesel|el|elektrisk|hybrid|laddhybrid|plug-in|etanol|e85|biogas|fordonsgas|gas|vätgas|cng|lng|biodiesel|hvo)\b/i,
+    gearbox: /^(?:automat|automatisk|manuell|manuel|steptronic|dsg|cvt|variomatic|sekventiell)/i,
+    color: /^(?:svart|vit|grå|silver|blå|röd|grön|brun|beige|gul|orange|lila|violett|guld|turkos|rosa|bronze|brons|mörk|ljus|metallic|pärl)/i,
+    drive: /^(?:4wd|awd|xdrive|fyrhjul|allhjul|bakhjul|framhjul|rwd|fwd|2wd)/i,
+    body_type: /^(?:herrgårdsvagn|kombi|sedan|halvkombi|kupé|coupé|cabriolet|suv|terräng|crossover|touring|hatchback|stationsvagn)/i,
+    status: /^(?:i trafik|avställd|avregistrerad|aldrig i trafik)/i,
+    make: /^[A-ZÅÄÖ][A-Za-zÅÄÖåäö\- ]{1,19}$/,
+  };
+
+  // Text efter rubriken på samma rad (sms o.d.), annars raden efter eller före beroende på sidans layout
+  function rest(lines, i, re) {
     const m = re.exec(lines[i]);
-    const rest = lines[i].slice(m.index + m[0].length).replace(/^[\s:–-]+/, '').trim();
-    return rest || (lines[i + 1] || '');
+    return lines[i].slice(m.index + m[0].length).replace(/^[\s:–-]+/, '').trim();
+  }
+  function valueNear(lines, i, re, dir) {
+    return rest(lines, i, re) || (dir === 'prev' ? (lines[i - 1] || '') : (lines[i + 1] || ''));
+  }
+  // Ta reda på om sidan har värdet före ('prev') eller efter ('next') rubriken
+  function layoutDirection(lines) {
+    let prev = 0, next = 0;
+    for (const [field, re, type] of FIELDS) {
+      if (type !== 'text' || !VALID[field] || field === 'make') continue;
+      lines.forEach((l, i) => {
+        if (!re.test(l) || rest(lines, i, re)) return;
+        if (VALID[field].test(lines[i + 1] || '')) next++;
+        if (VALID[field].test(lines[i - 1] || '')) prev++;
+      });
+    }
+    return prev > next ? 'prev' : 'next';
   }
 
   // ---- Strukturerad historik --------------------------------------------------------
@@ -164,18 +192,25 @@
       .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');   // länkar i markdown-form: [Besikta](https://…) -> Besikta
     const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
     const info = {}, found = [];
+    const dir = layoutDirection(lines);
     for (const [field, re, type] of FIELDS) {
       for (let i = 0; i < lines.length && info[field] == null; i++) {
         if (!re.test(lines[i])) continue;
-        const near = valueNear(lines, i, re);
+        let near = valueNear(lines, i, re, dir);
         let v = null;
+        if (type === 'text' && VALID[field]) {
+          // Välj den rad (samma, före eller efter) som faktiskt ser ut som ett sådant värde
+          const r = rest(lines, i, re);
+          const cands = (r ? [r] : []).concat(dir === 'prev' ? [lines[i - 1], lines[i + 1]] : [lines[i + 1], lines[i - 1]]);
+          near = cands.find(c => c && VALID[field].test(c.trim())) || '';
+        }
         if (type === 'date') v = dates(near)[0] || null;
         else if (type === 'date_last') { const ds = dates(near); v = ds.length ? ds[ds.length - 1] : null; }
-        else if (type === 'range') { const ds = dates(near + ' ' + (lines[i + 2] || '')); v = ds.length >= 2 ? [ds[0], ds[1]] : null; }
+        else if (type === 'range') { const ds = dates(near + ' ' + (dir === 'prev' ? '' : (lines[i + 2] || ''))); v = ds.length >= 2 ? [ds[0], ds[1]] : null; }
         else if (type === 'distance') v = distance(near);
         else if (type === 'int') v = integer(near);
         else if (type === 'money') v = money(near);
-        else if (type === 'text') v = near.split(/\s{2,}|[.,;]/)[0].trim().slice(0, 40) || null;
+        else if (type === 'text') v = (near.split(/\s{2,}|[.,;]/)[0] || '').trim().slice(0, 40) || null;
         else if (type === 'vin') { const m = VIN_RE.exec(near.toUpperCase()); v = m ? m[1] : null; }
         else if (type === 'paintcode') { const m = /\b([A-Z]?\d{2,3}|[A-Z]\d{2}|[A-Z]{2}\d)\b/.exec(near.toUpperCase()); v = m ? m[1].replace(/^0(?=\d{3}$)/, '') : null; }
         else if (type === 'hp') {
@@ -236,7 +271,7 @@
     return { info, found: found.concat(info.status && !found.includes('status') ? ['status'] : []), lines: lines.length };
   }
 
-  const api = { parse, dates, distance, cleanText };
+  const api = { parse, dates, distance, cleanText, VALID };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.PasteParser = api;
 })(typeof window !== 'undefined' ? window : globalThis);

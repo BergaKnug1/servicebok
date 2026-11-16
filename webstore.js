@@ -119,7 +119,8 @@
     if (!checkDigitOk(vin)) res.warnings.push('Kontrollsiffran (pos 9) stämmer inte. Kontrollera att VIN är rätt inskrivet.');
     if (!V.wmi[res.wmi]) res.warnings.push('Inte ett känt BMW/MINI-VIN – loggboken fungerar ändå.');
     const known = ((await meta('typekeys')) || {})[res.type_key];
-    if (known) { Object.entries(known).forEach(([k, v]) => { if (v != null && v !== '') res[k] = v; }); res.source = 'inlärd typnyckel'; }
+    const ok = (k, v) => v != null && v !== '' && (!PasteParser.VALID[k] || PasteParser.VALID[k].test(String(v).trim()));
+    if (known) { Object.entries(known).forEach(([k, v]) => { if (ok(k, v)) res[k] = v; }); res.source = 'inlärd typnyckel'; }
     const ch = V.chassis[res.chassis];
     if (ch) Object.assign(res, { chassis_desc: ch[0], profile: ch[2], body: res.body || ch[1] });
     return res;
@@ -146,11 +147,14 @@
     if (model && (!car.model || car.model === defModel)) upd.model = model;
     const year = info.model_year || info.vehicle_year;
     if (!car.year && year) upd.year = +year;
+    const isColor = s => !!s && PasteParser.VALID.color.test(String(s).trim());
+    const color = isColor(info.color) ? info.color : null;
+    if (car.paint_name && !car.paint_code && !isColor(car.paint_name)) { car = { ...car, paint_name: null }; upd.paint_name = color; }
     if (!car.paint_code) {
       const code = String(info.paint_code || '').toUpperCase().replace(/^0+/, '') || null;
       if (code && V.paints[code]) Object.assign(upd, { paint_code: code, paint_name: V.paints[code][0], paint_hex: V.paints[code][1] });
-      else if (code) Object.assign(upd, { paint_code: code, paint_name: car.paint_name || info.color || null });
-      else if (!car.paint_name && info.color) upd.paint_name = info.color;
+      else if (code) Object.assign(upd, { paint_code: code, paint_name: car.paint_name || color });
+      else if (!car.paint_name && color) upd.paint_name = color;
     }
     const body = bodyFromText(info.body_type);
     if (body && !car.chassis && [null, undefined, '', 'sedan'].includes(car.body)) upd.body = body;
@@ -162,7 +166,8 @@
     if (info.inspection_valid_until) rec.next_inspection = info.inspection_valid_until;
     if (info.meter && info.meter > (c.mileage || 0)) rec.mileage = info.meter;
     await put('cars', rec);
-    await learnTypeKey(rec, { fuel: info.fuel, power_hp: info.power_hp, gearbox: info.gearbox, body: bodyFromText(info.body_type) });
+    const okv = k => info[k] && PasteParser.VALID[k].test(String(info[k]).trim()) ? info[k] : null;
+    await learnTypeKey(rec, { fuel: okv('fuel'), gearbox: okv('gearbox'), drive: okv('drive'), power_hp: info.power_hp, body: bodyFromText(info.body_type) });
     changed();
     return { ...(await viewCar(rec)), filled: Object.keys(filled).filter(k => k !== 'paint_hex').sort() };
   }
